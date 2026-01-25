@@ -7,6 +7,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using DiTails.Utilities;
+using OculusStudios.Platform.Core;
 using Zenject;
 
 namespace DiTails
@@ -15,12 +16,12 @@ namespace DiTails
     {
         private readonly SiraLog _siraLog;
         private readonly BeatSaver _beatSaver;
-        private readonly IPlatformUserModel _platformUserModel;
+        private readonly IPlatform _platform;
 
-        internal LevelDataService(SiraLog siraLog, IPlatformUserModel platformUserModel, UBinder<Plugin, PluginMetadata> metadataBinder)
+        internal LevelDataService(SiraLog siraLog, IPlatform platform, UBinder<Plugin, PluginMetadata> metadataBinder)
         {
             _siraLog = siraLog;
-            _platformUserModel = platformUserModel;
+            _platform = platform;
             _beatSaver = new BeatSaver("DiTails", Version.Parse(metadataBinder.Value.HVersion.ToString()));
         }
 
@@ -46,34 +47,28 @@ namespace DiTails
             try
             {
                 bool steam = false;
-                var info = await _platformUserModel.GetUserInfo(token);
 
-                if (info.platform == UserInfo.Platform.Steam)
+                if (_platform.vendor == Vendor.Valve)
                 {
                     steam = true;
                 }
-                else if (info.platform != UserInfo.Platform.Oculus)
+                else if (_platform.vendor != Vendor.Meta)
                 {
                     _siraLog.Debug("Current platform cannot vote.");
                     return beatmap;
                 }
 
-                var authToken = await _platformUserModel.GetUserAuthToken();
-                var ticket = authToken.token;
+                var ticket = await _platform.user.GetAccessTokenAsync();
 
                 _siraLog.Debug("Starting Vote...");
                 if (steam)
                 {
                     ticket = ticket.Replace("-", "");
                 }
-                else
-                {
-                    ticket = authToken.token;
-                }
 
                 var response = await beatmap.LatestVersion.Vote(upvote ? BeatSaverSharp.Models.Vote.Type.Upvote : BeatSaverSharp.Models.Vote.Type.Downvote,
                     steam ? BeatSaverSharp.Models.Vote.Platform.Steam : BeatSaverSharp.Models.Vote.Platform.Oculus,
-                    info.platformUserId,
+                    _platform.user.userId.ToString(),
                     ticket, token);
 
                 _siraLog.Info(response.Successful);

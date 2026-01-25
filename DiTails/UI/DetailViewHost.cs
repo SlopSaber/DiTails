@@ -15,6 +15,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using OculusStudios.Platform.Core;
 using TMPro;
 using UnityEngine;
 using Zenject;
@@ -34,17 +35,17 @@ namespace DiTails.UI
 
         private readonly SiraLog _siraLog;
         private readonly LevelDataService _levelDataService;
-        private readonly IPlatformUserModel _platformUserModel;
+        private readonly IPlatform _platform;
         private readonly DetailContextManager _detailContextManager;
         public static readonly FieldAccessor<ImageView, float>.Accessor IMAGESKEW = FieldAccessor<ImageView, float>.GetAccessor("_skew");
 
         #region Initialization 
 
-        public DetailViewHost(SiraLog siraLog, LevelDataService levelDataService, IPlatformUserModel platformUserModel, DetailContextManager detailContextManager)
+        public DetailViewHost(SiraLog siraLog, LevelDataService levelDataService, IPlatform platform, DetailContextManager detailContextManager)
         {
             _siraLog = siraLog;
             _levelDataService = levelDataService;
-            _platformUserModel = platformUserModel;
+            _platform = platform;
             _detailContextManager = detailContextManager;
             _cts = new CancellationTokenSource();
         }
@@ -65,8 +66,7 @@ namespace DiTails.UI
         {
             if (!_didParse)
             {
-                var info = await _platformUserModel.GetUserInfo(_cts.Token);
-                CanVote = true;
+                CanVote = _platform.vendor == Vendor.Valve || _platform.vendor == Vendor.Meta;
 
                 _siraLog.Debug("Doing Initial BSML Parsing of the Detail View");
                 _siraLog.Debug("Getting Manifest Stream");
@@ -218,9 +218,8 @@ namespace DiTails.UI
 
                 VoteLoading = false;
             }
-
-            var info = await _platformUserModel.GetUserInfo(_cts.Token);
-            CanVote = info.platform == UserInfo.Platform.Steam || info.platform == UserInfo.Platform.Test || info.platform == UserInfo.Platform.Oculus;
+            
+            CanVote = _platform.vendor == Vendor.Valve || _platform.vendor == Vendor.Meta;
         }
 
         #endregion
