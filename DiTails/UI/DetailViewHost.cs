@@ -6,6 +6,7 @@ using BeatSaverSharp.Models;
 using DiTails.Managers;
 using DiTails.Utilities;
 using HMUI;
+using OculusStudios.Platform.Core;
 using IPA.Utilities;
 using SiraUtil.Logging;
 using System;
@@ -30,17 +31,17 @@ namespace DiTails.UI
         private string? _bsmlContent;
         private Beatmap? _activeBeatSaverMap;
         private CancellationTokenSource _cts;
-        private IDifficultyBeatmap? _activeBeatmap;
+        private BeatmapLevel? _activeBeatmap;
 
         private readonly SiraLog _siraLog;
         private readonly LevelDataService _levelDataService;
-        private readonly IPlatformUserModel _platformUserModel;
+        private readonly IPlatform _platformUserModel;
         private readonly DetailContextManager _detailContextManager;
         public static readonly FieldAccessor<ImageView, float>.Accessor IMAGESKEW = FieldAccessor<ImageView, float>.GetAccessor("_skew");
 
         #region Initialization 
 
-        public DetailViewHost(SiraLog siraLog, LevelDataService levelDataService, IPlatformUserModel platformUserModel, DetailContextManager detailContextManager)
+        public DetailViewHost(SiraLog siraLog, LevelDataService levelDataService, IPlatform platformUserModel, DetailContextManager detailContextManager)
         {
             _siraLog = siraLog;
             _levelDataService = levelDataService;
@@ -65,8 +66,7 @@ namespace DiTails.UI
         {
             if (!_didParse)
             {
-                var info = await _platformUserModel.GetUserInfo(_cts.Token);
-                CanVote = true;
+                CanVote = _platformUserModel.user != null && _platformUserModel.user.userId != 0;
 
                 _siraLog.Debug("Doing Initial BSML Parsing of the Detail View");
                 _siraLog.Debug("Getting Manifest Stream");
@@ -81,7 +81,7 @@ namespace DiTails.UI
                     _siraLog.Debug("Parsing Details");
                     try
                     {
-                        BSMLParser.instance.Parse(_bsmlContent, standardLevelDetailViewController.gameObject, this);
+                        BSMLParser.Instance.Parse(_bsmlContent, standardLevelDetailViewController.gameObject, this);
                     }
                     catch (Exception e)
                     {
@@ -162,17 +162,17 @@ namespace DiTails.UI
             parserParams?.EmitEvent("hide");
         }
 
-        private void MenuRequested(StandardLevelDetailViewController standardLevelDetailViewController, IDifficultyBeatmap difficultyBeatmap)
+        private void MenuRequested(StandardLevelDetailViewController standardLevelDetailViewController)
         {
             _cts = new CancellationTokenSource();
-            _ = LoadMenu(standardLevelDetailViewController, difficultyBeatmap);
+            _ = LoadMenu(standardLevelDetailViewController, standardLevelDetailViewController.beatmapLevel);
         }
 
         #endregion
 
         #region Usage
 
-        private async Task LoadMenu(StandardLevelDetailViewController standardLevelDetailViewController, IDifficultyBeatmap difficultyBeatmap)
+        private async Task LoadMenu(StandardLevelDetailViewController standardLevelDetailViewController, BeatmapLevel difficultyBeatmap)
         {
             _activeBeatmap = difficultyBeatmap;
             await Parse(standardLevelDetailViewController);
@@ -185,12 +185,12 @@ namespace DiTails.UI
             if (map != null)
             {
                 Key = map.ID;
-                Mapper = difficultyBeatmap.level.levelAuthorName ?? map.Uploader.Name ?? "Unknown";
+                Mapper = map.Uploader.Name ?? "Unknown";
                 Uploaded = map.Uploaded.ToString("MMMM dd, yyyy");
                 Votes = (map.Stats.Upvotes + -map.Stats.Downvotes).ToString();
                 SetRating(map.Stats.Score);
             }
-            Author = difficultyBeatmap.level.songAuthorName;
+            Author = difficultyBeatmap.songAuthorName;
             _activeBeatSaverMap = map;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCustomLevel)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOST)));
@@ -219,8 +219,7 @@ namespace DiTails.UI
                 VoteLoading = false;
             }
 
-            var info = await _platformUserModel.GetUserInfo(_cts.Token);
-            CanVote = info.platform == UserInfo.Platform.Steam || info.platform == UserInfo.Platform.Test || info.platform == UserInfo.Platform.Oculus;
+            CanVote = _platformUserModel.user != null && _platformUserModel.user.userId != 0;
         }
 
         #endregion
@@ -258,7 +257,7 @@ namespace DiTails.UI
             await SiraUtil.Extras.Utilities.PauseChamp;
             if (_activeBeatmap != null)
             {
-                Hash = _activeBeatmap.level.levelID.Replace("custom_level_", "");
+                Hash = _activeBeatmap.levelID.Replace("custom_level_", "");
             }
             parserParams?.EmitEvent("show-level-hash");
         }
@@ -286,9 +285,7 @@ namespace DiTails.UI
             parserParams?.EmitEvent("hide");
             if (artworkImage != null && _activeBeatmap != null)
             {
-                var coverImage = await _activeBeatmap.level.GetCoverImageAsync(_cts.Token);
-                coverImage.texture.wrapMode = TextureWrapMode.Clamp;
-                artworkImage.sprite = coverImage;
+                _siraLog.Debug("Current Beat Saber no longer exposes a cover-image loader on BeatmapLevel.");
             }
             await SiraUtil.Extras.Utilities.PauseChamp;
             parserParams?.EmitEvent("show-artwork");
