@@ -46,10 +46,6 @@
 			<HintPath>$(BeatSaberDir)\Libs\BeatSaverSharp.dll</HintPath>
 			<Private>False</Private>
 		</Reference>
-		<Reference Include="BGNet">
-		  	<HintPath>$(BeatSaberDir)\Beat Saber_Data\Managed\BGNet.dll</HintPath>
-			<Private>False</Private>
-		</Reference>
 		<Reference Include="Hive.Versioning">
 			<HintPath>$(BeatSaberDir)\Libs\Hive.Versioning.dll</HintPath>
 			<Private>False</Private>
@@ -76,10 +72,6 @@
 		</Reference>
 		<Reference Include="SemVer">
 			<HintPath>$(BeatSaberDir)\Libs\SemVer.dll</HintPath>
-			<Private>False</Private>
-		</Reference>
-		<Reference Include="Steamworks.NET">
-			<HintPath>$(BeatSaberDir)\Beat Saber_Data\Managed\Steamworks.NET.dll</HintPath>
 			<Private>False</Private>
 		</Reference>
 		<Reference Include="UnityEngine">
