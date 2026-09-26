@@ -30,7 +30,9 @@ namespace DiTails.UI
         private bool _didSetupVote;
         private string? _bsmlContent;
         private Beatmap? _activeBeatSaverMap;
-        private CancellationTokenSource _cts;
+        private CancellationTokenSource? _selectionCts;
+        private Task? _parseTask;
+        private Task? _setupVotingTask;
         private BeatmapLevel? _activeBeatmap;
 
         private readonly SiraLog _siraLog;
@@ -47,7 +49,6 @@ namespace DiTails.UI
             _levelDataService = levelDataService;
             _platformUserModel = platformUserModel;
             _detailContextManager = detailContextManager;
-            _cts = new CancellationTokenSource();
         }
 
         public void Initialize()
@@ -58,6 +59,8 @@ namespace DiTails.UI
 
         public void Dispose()
         {
+            _selectionCts?.Cancel();
+            _selectionCts = null;
             _detailContextManager.BeatmapUnselected -= HideMenu;
             _detailContextManager.DetailMenuRequested -= MenuRequested;
         }
@@ -150,7 +153,8 @@ namespace DiTails.UI
 
         private void HideMenu()
         {
-            _cts.Cancel();
+            _selectionCts?.Cancel();
+            _selectionCts = null;
             if (_didParse && rootTransform != null && mainModalTransform != null && openURLModalTransform != null && levelHashModalTransform != null && descriptionModalTransform != null && artworkModalTransform != null)
             {
                 mainModalTransform.transform.SetParent(rootTransform.transform);
@@ -164,36 +168,61 @@ namespace DiTails.UI
 
         private void MenuRequested(StandardLevelDetailViewController standardLevelDetailViewController)
         {
-            _cts = new CancellationTokenSource();
-            _ = LoadMenu(standardLevelDetailViewController, standardLevelDetailViewController.beatmapLevel);
+            _selectionCts?.Cancel();
+            var request = new CancellationTokenSource();
+            _selectionCts = request;
+            _ = LoadMenu(standardLevelDetailViewController, standardLevelDetailViewController.beatmapLevel, request);
         }
 
         #endregion
 
         #region Usage
 
-        private async Task LoadMenu(StandardLevelDetailViewController standardLevelDetailViewController, BeatmapLevel difficultyBeatmap)
+        private async Task LoadMenu(StandardLevelDetailViewController standardLevelDetailViewController, BeatmapLevel difficultyBeatmap, CancellationTokenSource request)
         {
-            _activeBeatmap = difficultyBeatmap;
-            await Parse(standardLevelDetailViewController);
-            await SetupVotingButtons();
-
-            ShowPanel = false;
-            parserParams?.EmitEvent("show-detail");
-            var map = await _levelDataService.GetBeatmap(difficultyBeatmap, _cts.Token);
-            ShowPanel = true;
-            if (map != null)
+            var token = request.Token;
+            try
             {
-                Key = map.ID;
-                Mapper = map.Uploader.Name ?? "Unknown";
-                Uploaded = map.Uploaded.ToString("MMMM dd, yyyy");
-                Votes = (map.Stats.Upvotes + -map.Stats.Downvotes).ToString();
-                SetRating(map.Stats.Score);
+                _activeBeatmap = difficultyBeatmap;
+                _activeBeatSaverMap = null;
+                CanVote = false;
+                await (_parseTask ??= Parse(standardLevelDetailViewController));
+                token.ThrowIfCancellationRequested();
+                await (_setupVotingTask ??= SetupVotingButtons());
+                token.ThrowIfCancellationRequested();
+
+                ShowPanel = false;
+                parserParams?.EmitEvent("show-detail");
+                var map = await _levelDataService.GetBeatmap(difficultyBeatmap, token);
+                token.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(_selectionCts, request)) return;
+
+                ShowPanel = true;
+                if (map != null)
+                {
+                    Key = map.ID;
+                    Mapper = map.Uploader.Name ?? "Unknown";
+                    Uploaded = map.Uploaded.ToString("MMMM dd, yyyy");
+                    Votes = (map.Stats.Upvotes + -map.Stats.Downvotes).ToString();
+                    SetRating(map.Stats.Score);
+                }
+                Author = difficultyBeatmap.songAuthorName;
+                _activeBeatSaverMap = map;
+                CanVote = map != null && _platformUserModel.user != null && _platformUserModel.user.userId != 0;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCustomLevel)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOST)));
             }
-            Author = difficultyBeatmap.songAuthorName;
-            _activeBeatSaverMap = map;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCustomLevel)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOST)));
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            catch (Exception e)
+            {
+                _siraLog.Critical(e);
+                if (ReferenceEquals(_selectionCts, request)) ShowPanel = true;
+            }
+            finally
+            {
+                if (ReferenceEquals(_selectionCts, request)) _selectionCts = null;
+                request.Dispose();
+            }
         }
 
         private void SetRating(float value)
@@ -212,7 +241,7 @@ namespace DiTails.UI
             if (_activeBeatSaverMap != null)
             {
                 VoteLoading = true;
-                _activeBeatSaverMap = await _levelDataService.Vote(_activeBeatSaverMap, upvote, token: _cts.Token);
+                _activeBeatSaverMap = await _levelDataService.Vote(_activeBeatSaverMap, upvote, token: CancellationToken.None);
                 Votes = (_activeBeatSaverMap.Stats.Upvotes + -_activeBeatSaverMap.Stats.Downvotes).ToString();
                 SetRating(_activeBeatSaverMap.Stats.Score);
 
