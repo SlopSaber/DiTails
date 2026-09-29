@@ -1,5 +1,6 @@
 using BeatSaverSharp;
 using BeatSaverSharp.Models;
+using DiTails.Utilities;
 using IPA.Loader;
 using OculusStudios.Platform.Core;
 using SiraUtil.Logging;
@@ -15,12 +16,12 @@ namespace DiTails
     {
         private readonly SiraLog _siraLog;
         private readonly BeatSaver _beatSaver;
-        private readonly IPlatform _platformUserModel;
+        private readonly IPlatform _platform;
 
-        internal LevelDataService(SiraLog siraLog, IPlatform platformUserModel, UBinder<Plugin, PluginMetadata> metadataBinder)
+        internal LevelDataService(SiraLog siraLog, IPlatform platform, UBinder<Plugin, PluginMetadata> metadataBinder)
         {
             _siraLog = siraLog;
-            _platformUserModel = platformUserModel;
+            _platform = platform;
             _beatSaver = new BeatSaver("DiTails", Version.Parse(metadataBinder.Value.HVersion.ToString()));
         }
 
@@ -30,27 +31,37 @@ namespace DiTails
             _beatSaver.Dispose();
         }
 
-        internal async Task<Beatmap?> GetBeatmap(BeatmapLevel difficultyBeatmap, CancellationToken token)
+        internal async Task<Beatmap?> GetBeatmap(BeatmapLevel level, CancellationToken token)
         {
-            if (!difficultyBeatmap.levelID.Contains("custom_level_"))
+            if (!level.TryGetHash(out var hash))
             {
                 return null;
             }
-            var hash = difficultyBeatmap.levelID.Replace("custom_level_", "");
-            var beatmap = await _beatSaver.BeatmapByHash(hash, token);
-            return beatmap ?? null;
+            return await _beatSaver.BeatmapByHash(hash, token);
         }
 
         internal async Task<Beatmap> Vote(Beatmap beatmap, bool upvote, CancellationToken token)
         {
             try
             {
-                bool steam = _platformUserModel.vendor == Vendor.Valve;
-                if (!steam && _platformUserModel.vendor != Vendor.Meta)
+                var steam = _platform.vendor == Vendor.Valve;
+                if (!steam && _platform.vendor != Vendor.Meta)
                     return beatmap;
 
-                _siraLog.Debug("Beat Saver voting requires the removed legacy platform auth-token API.");
-                return beatmap;
+                var user = _platform.user;
+                if (user == null || user.userId == 0) return beatmap;
+
+                var ticket = await user.GetAccessTokenAsync();
+                if (steam) ticket = ticket.Replace("-", "");
+
+                var response = await beatmap.LatestVersion.Vote(
+                    upvote ? BeatSaverSharp.Models.Vote.Type.Upvote : BeatSaverSharp.Models.Vote.Type.Downvote,
+                    steam ? BeatSaverSharp.Models.Vote.Platform.Steam : BeatSaverSharp.Models.Vote.Platform.Oculus,
+                    user.userId.ToString(), ticket, token);
+
+                _siraLog.Info(response.Successful);
+                _siraLog.Info(response.Error ?? "good");
+                if (response.Successful) await beatmap.Refresh(token);
             }
             catch (Exception e)
             {

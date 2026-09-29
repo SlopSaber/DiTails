@@ -137,6 +137,10 @@
 			<HintPath>$(GameDirectory)\Plugins\SiraUtil.dll</HintPath>
 			<Private>False</Private>
 		</Reference>
+		<Reference Include="SongCore">
+			<HintPath>$(GameDirectory)\Plugins\SongCore.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
 		<Reference Include="Zenject">
 			<HintPath>$(GameDirectory)\Beat Saber_Data\Managed\Zenject.dll</HintPath>
 			<Private>False</Private>

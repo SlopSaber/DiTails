@@ -37,17 +37,17 @@ namespace DiTails.UI
 
         private readonly SiraLog _siraLog;
         private readonly LevelDataService _levelDataService;
-        private readonly IPlatform _platformUserModel;
+        private readonly IPlatform _platform;
         private readonly DetailContextManager _detailContextManager;
         public static readonly FieldAccessor<ImageView, float>.Accessor IMAGESKEW = FieldAccessor<ImageView, float>.GetAccessor("_skew");
 
         #region Initialization 
 
-        public DetailViewHost(SiraLog siraLog, LevelDataService levelDataService, IPlatform platformUserModel, DetailContextManager detailContextManager)
+        public DetailViewHost(SiraLog siraLog, LevelDataService levelDataService, IPlatform platform, DetailContextManager detailContextManager)
         {
             _siraLog = siraLog;
             _levelDataService = levelDataService;
-            _platformUserModel = platformUserModel;
+            _platform = platform;
             _detailContextManager = detailContextManager;
         }
 
@@ -69,7 +69,7 @@ namespace DiTails.UI
         {
             if (!_didParse)
             {
-                CanVote = _platformUserModel.user != null && _platformUserModel.user.userId != 0;
+                CanVote = false;
 
                 _siraLog.Debug("Doing Initial BSML Parsing of the Detail View");
                 _siraLog.Debug("Getting Manifest Stream");
@@ -155,6 +155,10 @@ namespace DiTails.UI
         {
             _selectionCts?.Cancel();
             _selectionCts = null;
+            _activeBeatmap = null;
+            _activeBeatSaverMap = null;
+            CanVote = false;
+            VoteLoading = false;
             if (_didParse && rootTransform != null && mainModalTransform != null && openURLModalTransform != null && levelHashModalTransform != null && descriptionModalTransform != null && artworkModalTransform != null)
             {
                 mainModalTransform.transform.SetParent(rootTransform.transform);
@@ -166,12 +170,12 @@ namespace DiTails.UI
             parserParams?.EmitEvent("hide");
         }
 
-        private void MenuRequested(StandardLevelDetailViewController standardLevelDetailViewController)
+        private void MenuRequested(StandardLevelDetailViewController standardLevelDetailViewController, BeatmapLevel level)
         {
             _selectionCts?.Cancel();
             var request = new CancellationTokenSource();
             _selectionCts = request;
-            _ = LoadMenu(standardLevelDetailViewController, standardLevelDetailViewController.beatmapLevel, request);
+            _ = LoadMenu(standardLevelDetailViewController, level, request);
         }
 
         #endregion
@@ -186,6 +190,7 @@ namespace DiTails.UI
                 _activeBeatmap = difficultyBeatmap;
                 _activeBeatSaverMap = null;
                 CanVote = false;
+                VoteLoading = false;
                 await (_parseTask ??= Parse(standardLevelDetailViewController));
                 token.ThrowIfCancellationRequested();
                 await (_setupVotingTask ??= SetupVotingButtons());
@@ -208,7 +213,7 @@ namespace DiTails.UI
                 }
                 Author = difficultyBeatmap.songAuthorName;
                 _activeBeatSaverMap = map;
-                CanVote = map != null && _platformUserModel.user != null && _platformUserModel.user.userId != 0;
+                CanVote = CanVoteForMap(map);
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCustomLevel)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOST)));
             }
@@ -234,21 +239,29 @@ namespace DiTails.UI
             }
         }
 
+        private bool CanVoteForMap(Beatmap? map) =>
+            map != null && (_platform.vendor == Vendor.Valve || _platform.vendor == Vendor.Meta)
+            && _platform.user != null && _platform.user.userId != 0;
+
         protected async Task Vote(bool upvote)
         {
+            var selectedMap = _activeBeatSaverMap;
+            if (selectedMap == null) return;
             CanVote = false;
-
-            if (_activeBeatSaverMap != null)
+            VoteLoading = true;
+            try
             {
-                VoteLoading = true;
-                _activeBeatSaverMap = await _levelDataService.Vote(_activeBeatSaverMap, upvote, token: CancellationToken.None);
-                Votes = (_activeBeatSaverMap.Stats.Upvotes + -_activeBeatSaverMap.Stats.Downvotes).ToString();
-                SetRating(_activeBeatSaverMap.Stats.Score);
-
-                VoteLoading = false;
+                var updatedMap = await _levelDataService.Vote(selectedMap, upvote, token: CancellationToken.None);
+                if (!ReferenceEquals(_activeBeatSaverMap, selectedMap)) return;
+                _activeBeatSaverMap = updatedMap;
+                Votes = (updatedMap.Stats.Upvotes + -updatedMap.Stats.Downvotes).ToString();
+                SetRating(updatedMap.Stats.Score);
             }
-
-            CanVote = _platformUserModel.user != null && _platformUserModel.user.userId != 0;
+            finally
+            {
+                VoteLoading = false;
+                CanVote = CanVoteForMap(_activeBeatSaverMap);
+            }
         }
 
         #endregion
@@ -286,7 +299,7 @@ namespace DiTails.UI
             await SiraUtil.Extras.Utilities.PauseChamp;
             if (_activeBeatmap != null)
             {
-                Hash = _activeBeatmap.levelID.Replace("custom_level_", "");
+                Hash = _activeBeatmap.TryGetHash(out var hash) ? hash : _activeBeatmap.levelID;
             }
             parserParams?.EmitEvent("show-level-hash");
         }
@@ -312,9 +325,16 @@ namespace DiTails.UI
         protected async Task ViewArtwork()
         {
             parserParams?.EmitEvent("hide");
-            if (artworkImage != null && _activeBeatmap != null)
+            var level = _activeBeatmap;
+            if (artworkImage != null && level != null)
             {
-                _siraLog.Debug("Current Beat Saber no longer exposes a cover-image loader on BeatmapLevel.");
+                var coverImage = await level.previewMediaData.GetCoverSpriteAsync();
+                if (!ReferenceEquals(level, _activeBeatmap)) return;
+                if (coverImage != null)
+                {
+                    coverImage.texture.wrapMode = TextureWrapMode.Clamp;
+                    artworkImage.sprite = coverImage;
+                }
             }
             await SiraUtil.Extras.Utilities.PauseChamp;
             parserParams?.EmitEvent("show-artwork");
