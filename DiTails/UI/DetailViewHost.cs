@@ -32,8 +32,10 @@ namespace DiTails.UI
         private Beatmap? _activeBeatSaverMap;
         private CancellationTokenSource? _selectionCts;
         private Task? _parseTask;
+        private Task<string>? _markupTask;
         private Task? _setupVotingTask;
         private BeatmapLevel? _activeBeatmap;
+        private bool _disposed;
 
         private readonly SiraLog _siraLog;
         private readonly LevelDataService _levelDataService;
@@ -59,6 +61,8 @@ namespace DiTails.UI
 
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
             _selectionCts?.Cancel();
             _selectionCts = null;
             _detailContextManager.BeatmapUnselected -= HideMenu;
@@ -67,18 +71,18 @@ namespace DiTails.UI
 
         private async Task Parse(StandardLevelDetailViewController standardLevelDetailViewController)
         {
+            if (_disposed || standardLevelDetailViewController == null) return;
             if (!_didParse)
             {
                 CanVote = false;
 
                 _siraLog.Debug("Doing Initial BSML Parsing of the Detail View");
                 _siraLog.Debug("Getting Manifest Stream");
-                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("DiTails.Views.detail-view.bsml"))
-                using (var reader = new StreamReader(stream))
-                {
-                    _siraLog.Debug("Reading Manifest Stream");
-                    _bsmlContent = await reader.ReadToEndAsync();
-                }
+                _siraLog.Debug("Reading Manifest Stream");
+                var content = await (_markupTask ??= Task.Factory.StartNew(ReadMarkup, "DiTails.Views.detail-view.bsml",
+                    CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default));
+                if (_disposed || standardLevelDetailViewController == null || _didParse) return;
+                _bsmlContent = content;
                 if (!string.IsNullOrWhiteSpace(_bsmlContent))
                 {
                     _siraLog.Debug("Parsing Details");
@@ -90,6 +94,7 @@ namespace DiTails.UI
                     {
                         _siraLog.Critical(e);
                     }
+                    if (_disposed || standardLevelDetailViewController == null) return;
                     if (rootTransform != null && mainModalTransform != null)
                     {
                         rootTransform.gameObject.name = "DiTailsDetailView";
@@ -128,24 +133,40 @@ namespace DiTails.UI
             }
         }
 
+        private static string ReadMarkup(object? resourceName)
+        {
+            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream((string)resourceName!))
+            using (var reader = new StreamReader(stream))
+                return reader.ReadToEnd();
+        }
+
         private async Task SetupVotingButtons()
         {
+            if (_disposed) return;
             if (!_didSetupVote)
             {
-                if (votingUpvoteImage != null && votingDownvoteImage != null)
+                var upvoteImage = votingUpvoteImage;
+                var downvoteImage = votingDownvoteImage;
+                if (AreVotingImagesCurrent(upvoteImage, downvoteImage))
                 {
-                    await votingUpvoteImage.SetImageAsync("DiTails.Resources.arrow.png");
-                    await votingDownvoteImage.SetImageAsync("DiTails.Resources.arrow.png");
-                    votingUpvoteImage.DefaultColor = new Color(0.388f, 1f, 0.388f);
-                    votingDownvoteImage.DefaultColor = new Color(1f, 0.188f, 0.188f);
+                    await upvoteImage.SetImageAsync("DiTails.Resources.arrow.png");
+                    if (!AreVotingImagesCurrent(upvoteImage, downvoteImage)) return;
+                    await downvoteImage.SetImageAsync("DiTails.Resources.arrow.png");
+                    if (!AreVotingImagesCurrent(upvoteImage, downvoteImage)) return;
+                    upvoteImage.DefaultColor = new Color(0.388f, 1f, 0.388f);
+                    downvoteImage.DefaultColor = new Color(1f, 0.188f, 0.188f);
 
-                    votingUpvoteImage.transform.localScale = new Vector2(0.9f, 1f);
-                    votingDownvoteImage.transform.localScale = new Vector2(0.9f, -1f);
+                    upvoteImage.transform.localScale = new Vector2(0.9f, 1f);
+                    downvoteImage.transform.localScale = new Vector2(0.9f, -1f);
 
                     _didSetupVote = true;
                 }
             }
         }
+
+        private bool AreVotingImagesCurrent(ClickableImage upvoteImage, ClickableImage downvoteImage) =>
+            !_disposed && upvoteImage != null && downvoteImage != null
+            && ReferenceEquals(upvoteImage, votingUpvoteImage) && ReferenceEquals(downvoteImage, votingDownvoteImage);
 
         #endregion
 
@@ -172,6 +193,7 @@ namespace DiTails.UI
 
         private void MenuRequested(StandardLevelDetailViewController standardLevelDetailViewController, BeatmapLevel level)
         {
+            if (_disposed || standardLevelDetailViewController == null) return;
             _selectionCts?.Cancel();
             var request = new CancellationTokenSource();
             _selectionCts = request;
@@ -193,14 +215,16 @@ namespace DiTails.UI
                 VoteLoading = false;
                 await (_parseTask ??= Parse(standardLevelDetailViewController));
                 token.ThrowIfCancellationRequested();
+                if (_disposed || standardLevelDetailViewController == null || !ReferenceEquals(_selectionCts, request)) return;
                 await (_setupVotingTask ??= SetupVotingButtons());
                 token.ThrowIfCancellationRequested();
+                if (_disposed || standardLevelDetailViewController == null || !ReferenceEquals(_selectionCts, request)) return;
 
                 ShowPanel = false;
                 parserParams?.EmitEvent("show-detail");
                 var map = await _levelDataService.GetBeatmap(difficultyBeatmap, token);
                 token.ThrowIfCancellationRequested();
-                if (!ReferenceEquals(_selectionCts, request)) return;
+                if (_disposed || standardLevelDetailViewController == null || !ReferenceEquals(_selectionCts, request)) return;
 
                 ShowPanel = true;
                 if (map != null)
@@ -221,7 +245,7 @@ namespace DiTails.UI
             catch (Exception e)
             {
                 _siraLog.Critical(e);
-                if (ReferenceEquals(_selectionCts, request)) ShowPanel = true;
+                if (!_disposed && standardLevelDetailViewController != null && ReferenceEquals(_selectionCts, request)) ShowPanel = true;
             }
             finally
             {
