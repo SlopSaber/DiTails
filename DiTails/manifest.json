@@ -7,7 +7,7 @@
   "description": "View extra details about a map!",
   "gameVersion": "1.45.3",
   "dependsOn": {
-    "BSIPA": "^4.2.1",
+    "BSIPA": "^5.0.0",
     "SiraUtil": "^3.0.0",
     "BeatSaverSharp": "^3.0.1",
     "BeatSaberMarkupLanguage": "^1.4.1"
